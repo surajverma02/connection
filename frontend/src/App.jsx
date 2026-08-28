@@ -17,7 +17,7 @@ const CallHistory = lazy(() => import('./pages/CallHistory'));
 
 // ─── Page loader ─────────────────────────────────────────────────────────────
 const PageLoader = () => (
-  <div className="flex h-screen items-center justify-center bg-white dark:bg-neutral-950">
+  <div className="flex h-[100dvh] items-center justify-center bg-white dark:bg-neutral-950">
     <div className="h-8 w-8 animate-spin rounded-full border-2 border-neutral-200 border-t-accent" />
   </div>
 );

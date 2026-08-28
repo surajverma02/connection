@@ -35,7 +35,7 @@ const Home = () => {
   };
 
   return (
-    <div className="flex h-screen bg-white dark:bg-neutral-950">
+    <div className="flex h-[100dvh] bg-white dark:bg-neutral-950">
       <SlimSidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Navbar />

@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import useAuthStore from '../stores/authStore';
 import useChatStore from '../stores/chatStore';
+import useCallStore from '../stores/callStore';
 
 let socketInstance = null;
 
@@ -78,27 +79,25 @@ const useSocket = () => {
     });
 
     // ─── WebRTC Call Events ───
-    const callStore = import('../stores/callStore').then(m => m.default.getState());
-    
-    socket.on('incomingCall', async ({ callerId, callerName, offer, type }) => {
-      const { setIncomingCall, clearIceCandidates } = await callStore;
+    socket.on('incomingCall', ({ callerId, callerName, offer, type }) => {
+      const { setIncomingCall, clearIceCandidates } = useCallStore.getState();
       setIncomingCall({ callerId, callerName: callerName || 'Someone', offer, type });
       clearIceCandidates();
     });
 
-    socket.on('iceCandidate', async ({ candidate }) => {
-      const { addIceCandidate } = await callStore;
+    socket.on('iceCandidate', ({ candidate }) => {
+      const { addIceCandidate } = useCallStore.getState();
       addIceCandidate(candidate);
     });
 
-    socket.on('callRejected', async () => {
-      const { clearCalls } = await callStore;
+    socket.on('callRejected', () => {
+      const { clearCalls } = useCallStore.getState();
       alert('Call was declined.');
       clearCalls();
     });
 
-    socket.on('callEnded', async () => {
-      const { setIncomingCall, clearIceCandidates } = await callStore;
+    socket.on('callEnded', () => {
+      const { setIncomingCall, clearIceCandidates } = useCallStore.getState();
       setIncomingCall(null);
       clearIceCandidates();
     });
