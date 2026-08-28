@@ -6,15 +6,7 @@ import User from '../models/user.model.js';
 const generateToken = (userId) =>
   jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
-const setTokenCookie = (res, token) => {
-  const isProd = process.env.NODE_ENV === 'production' || process.env.CLIENT_URL?.startsWith('https');
-  res.cookie('jwt', token, {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: isProd ? 'none' : 'lax',
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in ms
-  });
-};
+// Cookies have been removed in favor of Bearer tokens sent in the response payload.
 
 const sanitizeUser = (user) => ({
   _id: user._id,
@@ -51,12 +43,13 @@ export const signup = async (req, res, next) => {
       return res.status(409).json({ message: 'Email already in use' });
     }
 
-    const user = await User.create({ name, email, password });
+    const newUser = await User.create({ name, email, password });
 
-    const token = generateToken(user._id);
-    setTokenCookie(res, token);
-
-    res.status(201).json({ user: sanitizeUser(user) });
+    const token = generateToken(newUser._id);
+    res.status(201).json({
+      user: sanitizeUser(newUser),
+      token,
+    });
   } catch (err) {
     next(err);
   }
@@ -93,9 +86,10 @@ export const login = async (req, res, next) => {
     await user.save();
 
     const token = generateToken(user._id);
-    setTokenCookie(res, token);
-
-    res.status(200).json({ user: sanitizeUser(user) });
+    res.status(200).json({
+      user: sanitizeUser(user),
+      token,
+    });
   } catch (err) {
     next(err);
   }
@@ -114,13 +108,7 @@ export const logout = async (req, res, next) => {
       });
     }
 
-    const isProd = process.env.NODE_ENV === 'production' || process.env.CLIENT_URL?.startsWith('https');
-    res.clearCookie('jwt', {
-      httpOnly: true,
-      secure: isProd,
-      sameSite: isProd ? 'none' : 'lax',
-    });
-
+    // Cookies are no longer used, so nothing to clear on the backend side
     res.status(200).json({ message: 'Logged out successfully' });
   } catch (err) {
     next(err);
