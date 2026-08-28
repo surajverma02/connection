@@ -8,42 +8,8 @@ const CallManager = () => {
   const {
     incomingCall, setIncomingCall,
     activeCall, setActiveCall,
-    pendingIceCandidates, addIceCandidate, clearIceCandidates, clearCalls
+    pendingIceCandidates, clearIceCandidates
   } = useCallStore();
-
-  useEffect(() => {
-    const socket = getSocketInstance();
-    if (!socket) return;
-
-    const handleIncomingCall = ({ callerId, callerName, offer, type }) => {
-      setIncomingCall({ callerId, callerName: callerName || 'Someone', offer, type });
-      clearIceCandidates();
-    };
-
-    const handleIceCandidate = ({ candidate }) => addIceCandidate(candidate);
-
-    const handleCallRejected = () => {
-      alert('Call was declined.');
-      clearCalls();
-    };
-
-    const handleCallEnded = () => {
-      setIncomingCall(null);
-      clearIceCandidates();
-    };
-
-    socket.on('incomingCall', handleIncomingCall);
-    socket.on('iceCandidate', handleIceCandidate);
-    socket.on('callRejected', handleCallRejected);
-    socket.on('callEnded', handleCallEnded);
-
-    return () => {
-      socket.off('incomingCall', handleIncomingCall);
-      socket.off('iceCandidate', handleIceCandidate);
-      socket.off('callRejected', handleCallRejected);
-      socket.off('callEnded', handleCallEnded);
-    };
-  }, [setIncomingCall, addIceCandidate, clearIceCandidates, clearCalls]);
 
   const handleAcceptCall = () => {
     if (!incomingCall) return;

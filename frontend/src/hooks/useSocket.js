@@ -77,6 +77,32 @@ const useSocket = () => {
       setTypingUser(conversationId, userId, false);
     });
 
+    // ─── WebRTC Call Events ───
+    const callStore = import('../stores/callStore').then(m => m.default.getState());
+    
+    socket.on('incomingCall', async ({ callerId, callerName, offer, type }) => {
+      const { setIncomingCall, clearIceCandidates } = await callStore;
+      setIncomingCall({ callerId, callerName: callerName || 'Someone', offer, type });
+      clearIceCandidates();
+    });
+
+    socket.on('iceCandidate', async ({ candidate }) => {
+      const { addIceCandidate } = await callStore;
+      addIceCandidate(candidate);
+    });
+
+    socket.on('callRejected', async () => {
+      const { clearCalls } = await callStore;
+      alert('Call was declined.');
+      clearCalls();
+    });
+
+    socket.on('callEnded', async () => {
+      const { setIncomingCall, clearIceCandidates } = await callStore;
+      setIncomingCall(null);
+      clearIceCandidates();
+    });
+
     return () => {
       socket.off('onlineUsers');
       socket.off('newMessage');
@@ -85,6 +111,10 @@ const useSocket = () => {
       socket.off('friendUpdate');
       socket.off('typing');
       socket.off('stopTyping');
+      socket.off('incomingCall');
+      socket.off('iceCandidate');
+      socket.off('callRejected');
+      socket.off('callEnded');
     };
   }, [user?._id]);
 
