@@ -5,70 +5,14 @@ import Navbar from '../components/Navbar';
 import SlimSidebar from '../components/SlimSidebar';
 import ConversationList from '../components/chat/ConversationList';
 import ChatWindow from '../components/chat/ChatWindow';
-import IncomingCallModal from '../components/call/IncomingCallModal';
-import CallWindow from '../components/call/CallWindow';
 import useChatStore from '../stores/chatStore';
-import { getSocketInstance } from '../hooks/useSocket';
+import useCallStore from '../stores/callStore';
 
 const Home = () => {
   const { activeConversation, setActiveConversation } = useChatStore();
   const [showMobileChat, setShowMobileChat] = useState(false);
 
-  // ─── Call state ────────────────────────────────────────────────────
-  const [incomingCall, setIncomingCall] = useState(null); // { callerId, callerName, offer, type }
-  const [activeCall, setActiveCall] = useState(null);     // { peerId, peerName, callType, isIncoming, remoteOffer }
-  const [pendingIceCandidates, setPendingIceCandidates] = useState([]);
-
-  useEffect(() => {
-    const socket = getSocketInstance();
-    if (!socket) return;
-
-    socket.on('incomingCall', ({ callerId, callerName, offer, type }) => {
-      setIncomingCall({ callerId, callerName: callerName || 'Someone', offer, type });
-      setPendingIceCandidates([]);
-    });
-
-    socket.on('iceCandidate', ({ candidate }) => {
-      setPendingIceCandidates((prev) => [...prev, candidate]);
-    });
-
-    socket.on('callRejected', () => {
-      alert('Call was declined.');
-      setActiveCall(null);
-      setPendingIceCandidates([]);
-    });
-
-    socket.on('callEnded', () => {
-      setIncomingCall(null);
-      setPendingIceCandidates([]);
-    });
-
-    return () => {
-      socket.off('incomingCall');
-      socket.off('iceCandidate');
-      socket.off('callRejected');
-      socket.off('callEnded');
-    };
-  }, []);
-
-  const handleAcceptCall = () => {
-    if (!incomingCall) return;
-    setActiveCall({
-      peerId: incomingCall.callerId,
-      peerName: incomingCall.callerName,
-      callType: incomingCall.type,
-      isIncoming: true,
-      remoteOffer: incomingCall.offer,
-    });
-    setIncomingCall(null);
-  };
-
-  const handleRejectCall = () => {
-    const socket = getSocketInstance();
-    socket?.emit('rejectCall', { callerId: incomingCall.callerId });
-    setIncomingCall(null);
-    setPendingIceCandidates([]);
-  };
+  const { setActiveCall } = useCallStore();
 
   const startCall = (type) => {
     if (!activeConversation) return;
@@ -134,31 +78,6 @@ const Home = () => {
         </main>
       </div>
 
-      {/* Incoming call modal */}
-      {incomingCall && (
-        <IncomingCallModal
-          callerName={incomingCall.callerName}
-          callType={incomingCall.type}
-          onAccept={handleAcceptCall}
-          onReject={handleRejectCall}
-        />
-      )}
-
-      {/* Active call window */}
-      {activeCall && (
-        <CallWindow
-          peerId={activeCall.peerId}
-          peerName={activeCall.peerName}
-          callType={activeCall.callType}
-          isIncoming={activeCall.isIncoming}
-          remoteOffer={activeCall.remoteOffer}
-          initialIceCandidates={pendingIceCandidates}
-          onEnd={() => {
-            setActiveCall(null);
-            setPendingIceCandidates([]);
-          }}
-        />
-      )}
       </div>
     </div>
   );

@@ -12,6 +12,12 @@ const useAuthStore = create(
 
       // Fetch the logged-in user from the server (called on app mount)
       checkAuth: async () => {
+        const token = localStorage.getItem('jwt');
+        if (!token) {
+          set({ user: null, isAuthenticated: false, isLoading: false });
+          return;
+        }
+        
         set({ isLoading: true, error: null });
         try {
           const res = await api.get('/auth/me');
@@ -27,6 +33,7 @@ const useAuthStore = create(
         set({ isLoading: true, error: null });
         try {
           const res = await api.post('/auth/login', { email, password });
+          localStorage.setItem('jwt', res.data.token);
           set({ user: res.data.user, isAuthenticated: true });
           return { success: true };
         } catch (err) {
@@ -42,6 +49,7 @@ const useAuthStore = create(
         set({ isLoading: true, error: null });
         try {
           const res = await api.post('/auth/signup', { name, email, password });
+          localStorage.setItem('jwt', res.data.token);
           set({ user: res.data.user, isAuthenticated: true });
           return { success: true };
         } catch (err) {
@@ -59,6 +67,7 @@ const useAuthStore = create(
         } catch {
           // ignore
         }
+        localStorage.removeItem('jwt');
         set({ user: null, isAuthenticated: false, error: null });
       },
 

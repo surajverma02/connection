@@ -22,6 +22,8 @@ const PageLoader = () => (
   </div>
 );
 
+import CallManager from './components/call/CallManager';
+
 // ─── Inner component so hooks (useSocket) run inside Router context ───────────
 const AppInner = () => {
   const { checkAuth } = useAuthStore();
@@ -37,7 +39,9 @@ const AppInner = () => {
   useSocket();
 
   return (
-    <Suspense fallback={<PageLoader />}>
+    <>
+      <CallManager />
+      <Suspense fallback={<PageLoader />}>
       <Routes>
         {/* Public routes */}
         <Route path="/login"  element={<Login />} />
@@ -66,6 +70,7 @@ const AppInner = () => {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Suspense>
+    </>
   );
 };
 
