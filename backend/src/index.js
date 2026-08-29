@@ -17,6 +17,7 @@ import messageRoutes from './routes/message.routes.js';
 import callRoutes from './routes/call.routes.js';
 import errorMiddleware from './middleware/error.middleware.js';
 import User from './models/user.model.js';
+import { startImageCleanupJob } from './jobs/imageCleanup.js';
 
 // ─── App Setup ───────────────────────────────────────────────────────────────
 
@@ -166,7 +167,19 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ─── Disconnect ───────────────────────────────────────────────────
+  // ─── ICE restart offer relay ──────────────────────────────────────
+  // Routes a restart offer from the caller to the peer without going through
+  // the incomingCall / ringing-modal path — the peer applies it silently to
+  // their existing RTCPeerConnection and sends back a new answer via acceptCall.
+  socket.on('iceRestartOffer', ({ peerId, offer }) => {
+    const peerSocket = onlineUsers.get(peerId);
+    console.log(`[${ts()}] 🔄 iceRestartOffer  from=${userId}  to=${peerId}  peerSocket=${peerSocket || 'NOT FOUND'}`);
+    if (peerSocket) {
+      io.to(peerSocket).emit('iceRestartOffer', { callerId: userId, offer });
+    }
+  });
+
+
   socket.on('disconnect', (reason) => {
     if (userId) {
       // Only remove from the map if this socket is still the current one for this user.
@@ -229,4 +242,7 @@ connectDB().then(() => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
     console.log(`🌐 Client URL: ${process.env.CLIENT_URL}`);
   });
+  
+  // Start background jobs
+  startImageCleanupJob();
 });

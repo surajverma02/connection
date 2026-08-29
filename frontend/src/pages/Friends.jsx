@@ -5,6 +5,7 @@ import SlimSidebar from '../components/SlimSidebar';
 import EmptyState from '../components/EmptyState';
 import useAuthStore from '../stores/authStore';
 import useChatStore from '../stores/chatStore';
+import { formatLastSeen } from '../utils/formatLastSeen';
 
 const Friends = () => {
   const { user } = useAuthStore();
@@ -146,7 +147,9 @@ const Friends = () => {
                     <p className="text-xs text-neutral-500 dark:text-neutral-400">
                       {onlineUsers.includes(f._id) ? (
                         <span className="text-green-500">● Online</span>
-                      ) : 'Offline'}
+                      ) : (
+                        <span>{formatLastSeen(f.lastSeen)}</span>
+                      )}
                     </p>
                   </div>
                 </div>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../api/axios';
 import useAuthStore from '../../stores/authStore';
@@ -7,6 +7,7 @@ import { getSocketInstance } from '../../hooks/useSocket';
 import MessageBubble from './MessageBubble';
 import MessageInput from './MessageInput';
 import TypingIndicator from './TypingIndicator';
+import { formatLastSeen } from '../../utils/formatLastSeen';
 
 const ChatWindow = ({ conversation, onBack, onStartCall }) => {
   const { user } = useAuthStore();
@@ -33,7 +34,10 @@ const ChatWindow = ({ conversation, onBack, onStartCall }) => {
 
   const topSentinelRef = useRef(null);
   const bottomRef = useRef(null);
+  const scrollContainerRef = useRef(null);
   const isFetchingRef = useRef(false);
+  const isPrependingRef = useRef(false);
+  const previousScrollHeightRef = useRef(0);
   const socket = getSocketInstance();
 
   // Join socket room + initial load
@@ -44,10 +48,24 @@ const ChatWindow = ({ conversation, onBack, onStartCall }) => {
     return () => socket?.emit('leaveConversation', conversationId);
   }, [conversationId]);
 
+  // Preserve scroll position when older messages are prepended
+  useLayoutEffect(() => {
+    if (isPrependingRef.current && scrollContainerRef.current) {
+      const scrollContainer = scrollContainerRef.current;
+      scrollContainer.scrollTop = scrollContainer.scrollHeight - previousScrollHeightRef.current;
+    }
+  }, [msgs.length]);
+
   // Scroll to bottom on new messages
   useEffect(() => {
     if (msgs.length > 0) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      if (isPrependingRef.current) {
+        // It was a prepend. Reset the flag, do not scroll to bottom.
+        isPrependingRef.current = false;
+      } else {
+        // Normal new message, scroll to bottom
+        bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }
     }
   }, [msgs.length]);
 
@@ -74,6 +92,12 @@ const ChatWindow = ({ conversation, onBack, onStartCall }) => {
     if (!oldest) { isFetchingRef.current = false; return; }
     try {
       const res = await api.get(`/messages/${conversationId}?before=${oldest.createdAt}`);
+      
+      if (scrollContainerRef.current) {
+        previousScrollHeightRef.current = scrollContainerRef.current.scrollHeight;
+        isPrependingRef.current = true;
+      }
+      
       prependMessages(conversationId, res.data.messages);
       setHasMore(conversationId, res.data.hasMore);
     } catch {}
@@ -120,7 +144,9 @@ const ChatWindow = ({ conversation, onBack, onStartCall }) => {
           <p className="text-xs text-neutral-500 dark:text-neutral-400">
             {onlineUsers.includes(otherParticipant?._id) ? (
               <span className="text-green-500">● Online</span>
-            ) : 'Offline'}
+            ) : (
+              <span>{formatLastSeen(otherParticipant?.lastSeen)}</span>
+            )}
           </p>
         </div>
 
@@ -163,7 +189,7 @@ const ChatWindow = ({ conversation, onBack, onStartCall }) => {
       </div>
 
       {/* Messages area */}
-      <div className="flex-1 overflow-y-auto px-4 py-4">
+      <div className="flex-1 overflow-y-auto px-4 py-4" ref={scrollContainerRef}>
         {/* Scroll sentinel — triggers loadMore when visible */}
         <div ref={topSentinelRef} className="h-1" />
 

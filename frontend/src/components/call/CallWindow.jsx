@@ -1,19 +1,28 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { getSocketInstance } from '../../hooks/useSocket';
 import useAuthStore from '../../stores/authStore';
+import useCallStore from '../../stores/callStore';
 import api from '../../api/axios';
+
+// ─── Constants ──────────────────────────────────────────────────────────────────
+const ts = () => new Date().toISOString();
+const MAX_ICE_RESTARTS = 3;
+const ICE_DISCONNECT_GRACE_MS = 3500; // grace window — transient drops often self-heal
 
 const CallWindow = ({ peerId, peerName, callType, onEnd, remoteOffer, isIncoming, initialIceCandidates = [] }) => {
   const { user } = useAuthStore();
+  const { setCallStatus } = useCallStore();
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const pcRef = useRef(null);
   const localStreamRef = useRef(null);
-  
+
   const [isMuted, setIsMuted] = useState(false);
   const [isCameraOff, setIsCameraOff] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
-  
+  // Local mirror of callStatus for rendering (avoids store selector churn on every tick)
+  const [localStatus, setLocalStatus] = useState('connecting');
+
   const timerRef = useRef(null);
   const socket = getSocketInstance();
   const startTimeRef = useRef(null);
@@ -21,6 +30,12 @@ const CallWindow = ({ peerId, peerName, callType, onEnd, remoteOffer, isIncoming
   const isMounted = useRef(true);
   const isRemoteDescriptionSet = useRef(false);
   const pendingIceCandidatesRef = useRef([...initialIceCandidates]);
+
+  // ICE restart tracking
+  const isCallerRef = useRef(!isIncoming);   // only the original caller initiates restarts
+  const iceRestartCountRef = useRef(0);
+  const iceRestartTimerRef = useRef(null);
+  const isRestartingRef = useRef(false);
 
   const iceServers = [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -43,11 +58,102 @@ const CallWindow = ({ peerId, peerName, callType, onEnd, remoteOffer, isIncoming
     }
   ];
 
+  // ─── Status helper ──────────────────────────────────────────────────────────────────
+  const updateStatus = useCallback((status) => {
+    setLocalStatus(status);
+    setCallStatus(status);
+    console.log(`[${ts()}] 📡 callStatus → ${status}`);
+  }, [setCallStatus]);
+
+  // ─── TURN / candidate type diagnostics ─────────────────────────────────────────────────
+  // Call this once the connection reaches 'connected'. It reads the active
+  // candidate pair from getStats() and logs whether the path is direct (host),
+  // STUN (srflx), or TURN relay — so you can tell whether metered.ca is involved.
+  const logCandidateType = useCallback(async () => {
+    const pc = pcRef.current;
+    if (!pc) return;
+    try {
+      const stats = await pc.getStats();
+      stats.forEach((report) => {
+        if (report.type === 'candidate-pair' && report.state === 'succeeded' && report.nominated) {
+          let localType = 'unknown';
+          let remoteType = 'unknown';
+          stats.forEach((r) => {
+            if (r.id === report.localCandidateId) localType = r.candidateType;   // host | srflx | relay
+            if (r.id === report.remoteCandidateId) remoteType = r.candidateType;
+          });
+          const isRelay = localType === 'relay' || remoteType === 'relay';
+          console.log(
+            `[${ts()}] 🔍 Active candidate pair — local: ${localType}  remote: ${remoteType}` +
+            (isRelay
+              ? '  ⚠️  RELAY (TURN) in use. If calls still drop, the free metered.ca TURN tier may be bandwidth/session-limited. Consider a paid TURN provider.'
+              : '  ✅ Direct/STUN path — TURN is not the bottleneck.')
+          );
+        }
+      });
+    } catch (err) {
+      console.warn(`[${ts()}] getStats() failed:`, err.message);
+    }
+  }, []);
+
+  // ─── ICE restart engine (caller-side only) ───────────────────────────────────────────
+  // Only the caller initiates ICE restarts to avoid both sides racing. The callee
+  // receives 'iceRestartOffer' via socket, applies it silently to the existing
+  // RTCPeerConnection, and sends back a new answer through the 'acceptCall' path.
+  const attemptIceRestart = useCallback(async () => {
+    const pc = pcRef.current;
+    if (!pc || !isCallerRef.current || isRestartingRef.current) return;
+    if (iceRestartCountRef.current >= MAX_ICE_RESTARTS) {
+      console.log(`[${ts()}] ❌ ICE restart limit (${MAX_ICE_RESTARTS}) reached — giving up.`);
+      updateStatus('disconnected');
+      return;
+    }
+    isRestartingRef.current = true;
+    iceRestartCountRef.current += 1;
+    const attempt = iceRestartCountRef.current;
+    const socketAlive = socket?.connected;
+    console.log(`[${ts()}] 🔄 ICE restart #${attempt}/${MAX_ICE_RESTARTS}  socketAlive=${socketAlive}  peerId=${peerId}`);
+    if (!socketAlive) {
+      // Signaling is down — ICE restart is impossible until the socket reconnects.
+      // The socket's 'connect' event will trigger registerUser and the call can retry.
+      console.warn(`[${ts()}] ⚠️  Socket is DOWN — ICE restart cannot proceed (dead signaling path). Waiting for socket reconnect...`);
+      isRestartingRef.current = false;
+      return;
+    }
+    try {
+      const offer = await pc.createOffer({ iceRestart: true });
+      await pc.setLocalDescription(offer);
+      socket.emit('iceRestartOffer', { peerId, offer });
+      console.log(`[${ts()}] 📤 iceRestartOffer emitted  attempt=${attempt}`);
+    } catch (err) {
+      console.error(`[${ts()}] ICE restart offer creation failed:`, err);
+    } finally {
+      isRestartingRef.current = false;
+    }
+  }, [socket, peerId, updateStatus]);
+
+  const scheduleIceRestart = useCallback(() => {
+    if (iceRestartTimerRef.current) return; // already scheduled, don't double-schedule
+    console.log(`[${ts()}] ⏳ Scheduling ICE restart in ${ICE_DISCONNECT_GRACE_MS}ms (grace window)...`);
+    iceRestartTimerRef.current = setTimeout(() => {
+      iceRestartTimerRef.current = null;
+      attemptIceRestart();
+    }, ICE_DISCONNECT_GRACE_MS);
+  }, [attemptIceRestart]);
+
+  const cancelIceRestartTimer = useCallback(() => {
+    if (iceRestartTimerRef.current) {
+      clearTimeout(iceRestartTimerRef.current);
+      iceRestartTimerRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     isMounted.current = true;
     startCall();
     return () => {
       isMounted.current = false;
+      cancelIceRestartTimer();
       cleanup();
     };
   }, []);
@@ -94,6 +200,50 @@ const CallWindow = ({ peerId, peerName, callType, onEnd, remoteOffer, isIncoming
         }
       };
 
+      // ─── Connection state monitoring ─────────────────────────────────────────
+      pc.oniceconnectionstatechange = () => {
+        const state = pc.iceConnectionState;
+        console.log(`[${ts()}] 🧩 ICE connection state: ${state}`);
+        if (state === 'connected' || state === 'completed') {
+          cancelIceRestartTimer();
+          isRestartingRef.current = false;
+          iceRestartCountRef.current = 0; // reset counter on successful recovery
+          updateStatus('connected');
+          logCandidateType();            // log host/srflx/relay for diagnostics
+        } else if (state === 'disconnected') {
+          updateStatus('reconnecting');
+          scheduleIceRestart();          // grace window — often self-heals on mobile
+        } else if (state === 'failed') {
+          cancelIceRestartTimer();       // no need to wait, go immediately
+          updateStatus('reconnecting');
+          attemptIceRestart();
+        } else if (state === 'closed') {
+          cancelIceRestartTimer();
+          if (isMounted.current) updateStatus('disconnected');
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        const state = pc.connectionState;
+        console.log(`[${ts()}] 🔗 Peer connection state: ${state}`);
+        if (state === 'connected') {
+          cancelIceRestartTimer();
+          updateStatus('connected');
+        } else if (state === 'disconnected') {
+          // oniceconnectionstatechange usually fires first; this is a belt-and-suspenders fallback
+          if (!iceRestartTimerRef.current) {
+            updateStatus('reconnecting');
+            scheduleIceRestart();
+          }
+        } else if (state === 'failed') {
+          cancelIceRestartTimer();
+          updateStatus('reconnecting');
+          attemptIceRestart();
+        } else if (state === 'closed') {
+          if (isMounted.current) updateStatus('disconnected');
+        }
+      };
+
       // Start timer
       startTimeRef.current = Date.now();
       timerRef.current = setInterval(() => {
@@ -107,15 +257,17 @@ const CallWindow = ({ peerId, peerName, callType, onEnd, remoteOffer, isIncoming
         await pc.setRemoteDescription(new RTCSessionDescription(remoteOffer));
         isRemoteDescriptionSet.current = true;
         await applyIceCandidates();
-        
+
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         socket?.emit('acceptCall', { callerId: peerId, answer });
+        updateStatus('connecting');
       } else {
         // Create offer
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         socket?.emit('callUser', { calleeId: peerId, offer, type: callType, callerName: user?.name });
+        updateStatus('connecting');
       }
     } catch (err) {
       console.error('Call setup failed:', err);
@@ -169,12 +321,34 @@ const CallWindow = ({ peerId, peerName, callType, onEnd, remoteOffer, isIncoming
       handleEnd(false);
     };
 
+    // ─── ICE restart: callee side ──────────────────────────────────────────────────
+    // Receives the restart offer from the caller, applies it to the *existing*
+    // RTCPeerConnection (no new ringing modal), and sends back a fresh answer
+    // through the normal 'acceptCall' socket path.
+    const handleIceRestartOffer = async ({ callerId, offer }) => {
+      const pc = pcRef.current;
+      if (!pc) return;
+      console.log(`[${ts()}] 🔄 iceRestartOffer received from callerId=${callerId} — applying to existing PC`);
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        isRemoteDescriptionSet.current = true;
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit('acceptCall', { callerId, answer });
+        console.log(`[${ts()}] 📤 ICE restart answer sent back to caller`);
+      } catch (err) {
+        console.error(`[${ts()}] iceRestartOffer handling failed:`, err);
+      }
+    };
+
     socket.on('callAccepted', handleCallAccepted);
+    socket.on('iceRestartOffer', handleIceRestartOffer);
     socket.on('iceCandidate', handleIceCandidate);
     socket.on('callEnded', handleCallEnded);
 
     return () => {
       socket.off('callAccepted', handleCallAccepted);
+      socket.off('iceRestartOffer', handleIceRestartOffer);
       socket.off('iceCandidate', handleIceCandidate);
       socket.off('callEnded', handleCallEnded);
     };
@@ -200,9 +374,11 @@ const CallWindow = ({ peerId, peerName, callType, onEnd, remoteOffer, isIncoming
       socket?.emit('endCall', { peerId });
       saveCallRecord('completed');
     }
+    cancelIceRestartTimer();
     cleanup();
+    setCallStatus('idle');
     onEnd?.();
-  }, [socket, peerId, onEnd]);
+  }, [socket, peerId, onEnd, cancelIceRestartTimer, setCallStatus]);
 
   const cleanup = () => {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -234,6 +410,39 @@ const CallWindow = ({ peerId, peerName, callType, onEnd, remoteOffer, isIncoming
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-neutral-950 text-white">
+
+      {/* ─── Reconnecting banner ──────────────────────────────────────────── */}
+      {/* Non-intrusive top bar — doesn't end the call, gives the user feedback */}
+      {localStatus === 'reconnecting' && (
+        <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-center gap-2.5 bg-yellow-500/90 px-4 py-2.5 text-sm font-semibold text-black backdrop-blur-sm">
+          <span className="inline-block h-2 w-2 animate-ping rounded-full bg-black/50" />
+          Reconnecting…
+        </div>
+      )}
+
+      {/* ─── Disconnected overlay ───────────────────────────────────────── */}
+      {/* Full overlay — only shown after all ICE restart attempts are exhausted */}
+      {localStatus === 'disconnected' && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-6 bg-neutral-950/95 backdrop-blur-sm">
+          <div className="flex h-20 w-20 items-center justify-center rounded-full bg-red-500/20 ring-1 ring-red-500/30">
+            <svg className="h-10 w-10 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 3l18 18M10.584 10.587a2 2 0 002.828 2.83M9.363 5.365A9.466 9.466 0 0112 5c4.478 0 8.268 3.943 9.543 9.442" />
+            </svg>
+          </div>
+          <div className="text-center">
+            <h3 className="text-xl font-semibold text-white">Call disconnected</h3>
+            <p className="mt-1 text-sm text-neutral-400">The connection could not be restored after {MAX_ICE_RESTARTS} attempts.</p>
+          </div>
+          <button
+            id="end-disconnected-btn"
+            onClick={() => handleEnd(true)}
+            className="rounded-full bg-red-500 px-8 py-3 text-sm font-semibold text-white transition hover:bg-red-600"
+          >
+            End Call
+          </button>
+        </div>
+      )}
+
       {/* Remote video / audio placeholder */}
       <div className="relative flex flex-1 items-center justify-center overflow-hidden">
         
