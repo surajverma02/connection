@@ -7,17 +7,18 @@ import ConversationList from '../components/chat/ConversationList';
 import ChatWindow from '../components/chat/ChatWindow';
 import useChatStore from '../stores/chatStore';
 import useCallStore from '../stores/callStore';
+import useAuthStore from '../stores/authStore';
 
 const Home = () => {
   const { activeConversation, setActiveConversation } = useChatStore();
   const [showMobileChat, setShowMobileChat] = useState(false);
-
+  const { user } = useAuthStore();
   const { setActiveCall } = useCallStore();
 
   const startCall = (type) => {
     if (!activeConversation) return;
     const other = activeConversation.participants?.find(
-      (p) => p._id !== activeConversation._localUserId
+      (p) => p._id !== user?._id
     );
     if (!other) return;
     setActiveCall({
