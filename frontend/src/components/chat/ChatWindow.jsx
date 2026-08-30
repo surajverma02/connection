@@ -8,6 +8,7 @@ import MessageBubble from './MessageBubble';
 import MessageInput from './MessageInput';
 import TypingIndicator from './TypingIndicator';
 import { formatLastSeen } from '../../utils/formatLastSeen';
+import confetti from 'canvas-confetti';
 
 const ChatWindow = ({ conversation, onBack, onStartCall }) => {
   const { user } = useAuthStore();
@@ -40,21 +41,71 @@ const ChatWindow = ({ conversation, onBack, onStartCall }) => {
   const previousScrollHeightRef = useRef(0);
   const socket = getSocketInstance();
 
+  const prevConversationIdRef = useRef(conversationId);
+  const isInitialScrollDoneRef = useRef(false);
+  const didJustInitialScrollRef = useRef(false);
+
+  if (prevConversationIdRef.current !== conversationId) {
+    prevConversationIdRef.current = conversationId;
+    isInitialScrollDoneRef.current = false;
+  }
+
   // Join socket room + initial load
   useEffect(() => {
     if (!conversationId) return;
+    
+    // ─── Special Animation for Shreya & Suraj ─────────────────────────
+    if (conversationId === '6a9289d496a47dec0dbb6f56' && user?.email === 'shreya@gmail.com') {
+      const STORAGE_KEY = 'shreya_confetti_count';
+      const count = parseInt(localStorage.getItem(STORAGE_KEY) || '0', 10);
+      
+      if (count < 3) {
+        localStorage.setItem(STORAGE_KEY, (count + 1).toString());
+        
+        const duration = 2500;
+        const end = Date.now() + duration;
+
+        const frame = () => {
+          confetti({
+            particleCount: 3,
+            angle: 60,
+            spread: 55,
+            origin: { x: 0 },
+            colors: ['#ef4444', '#f43f5e', '#ec4899']
+          });
+          confetti({
+            particleCount: 3,
+            angle: 120,
+            spread: 55,
+            origin: { x: 1 },
+            colors: ['#ef4444', '#f43f5e', '#ec4899']
+          });
+
+          if (Date.now() < end) {
+            requestAnimationFrame(frame);
+          }
+        };
+        frame();
+      }
+    }
+    
     socket?.emit('joinConversation', conversationId);
     loadInitialMessages();
     return () => socket?.emit('leaveConversation', conversationId);
   }, [conversationId]);
 
-  // Preserve scroll position when older messages are prepended
+  // Preserve scroll position when older messages are prepended, OR scroll to bottom instantly on first load
   useLayoutEffect(() => {
     if (isPrependingRef.current && scrollContainerRef.current) {
       const scrollContainer = scrollContainerRef.current;
       scrollContainer.scrollTop = scrollContainer.scrollHeight - previousScrollHeightRef.current;
+    } else if (!isInitialScrollDoneRef.current && msgs.length > 0 && scrollContainerRef.current) {
+      // Instant scroll to bottom on first load with messages
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+      isInitialScrollDoneRef.current = true;
+      didJustInitialScrollRef.current = true;
     }
-  }, [msgs.length]);
+  }, [msgs.length, conversationId]);
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -62,8 +113,11 @@ const ChatWindow = ({ conversation, onBack, onStartCall }) => {
       if (isPrependingRef.current) {
         // It was a prepend. Reset the flag, do not scroll to bottom.
         isPrependingRef.current = false;
+      } else if (didJustInitialScrollRef.current) {
+        // Initial load instant scroll was just handled. Reset flag.
+        didJustInitialScrollRef.current = false;
       } else {
-        // Normal new message, scroll to bottom
+        // Normal new message, scroll to bottom smoothly
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
       }
     }
@@ -189,7 +243,8 @@ const ChatWindow = ({ conversation, onBack, onStartCall }) => {
       </div>
 
       {/* Messages area */}
-      <div className="flex-1 overflow-y-auto px-4 py-4" ref={scrollContainerRef}>
+      <div className="flex-1 overflow-y-auto px-4 py-4 relative" ref={scrollContainerRef}>
+        
         {/* Scroll sentinel — triggers loadMore when visible */}
         <div ref={topSentinelRef} className="h-1" />
 
